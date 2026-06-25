@@ -1,46 +1,58 @@
-
 from fastapi import APIRouter, HTTPException, Response, Request
-from src.schemas.users import UserRequestAdd, UserAdd
-from repositories.users import UsersRepository
+from starlette.requests import Request
+
+from src.api.dependencies import UserIdDep
+from src.repositories.users import UsersRepository
 from src.db import async_session_maker
-from src.config import settings
+from src.schemas.users import UserRequestAdd, UserAdd
 from src.services.auth import AuthService
 
-
-router = APIRouter(prefix='/auth', tags=["Авторизация и аутентификация"])
+router = APIRouter(prefix="/auth", tags=["Авторизация и аутентификация"])
 
 
 @router.post("/register")
 async def register_user(
-    data: UserRequestAdd, 
+        data: UserRequestAdd,
 ):
     hashed_password = AuthService().hash_password(data.password)
     new_user_data = UserAdd(email=data.email, hashed_password=hashed_password)
     async with async_session_maker() as session:
         await UsersRepository(session).add(new_user_data)
         await session.commit()
+
     return {"status": "OK"}
 
 
 @router.post("/login")
 async def login_user(
-    data: UserRequestAdd, 
-    response: Response
+        data: UserRequestAdd,
+        response: Response,
 ):
     async with async_session_maker() as session:
         user = await UsersRepository(session).get_user_with_hashed_password(email=data.email)
         if not user:
-            return HTTPException(status_code=401, detail='Пользователь с таким email не зарегистирован')
-        access_token = AuthService().create_access_token({"user_id" : user.id})
+            raise HTTPException(status_code=401, detail="Пользователь с таким email не зарегистрирован")
         if not AuthService().verify_password(data.password, user.hashed_password):
-            return HTTPException(status_code=401, detail="Пароль неверный")
-        response.set_cookies("access_token", access_token)
-        return {"access_token" : access_token}
+            raise HTTPException(status_code=401, detail="Пароль неверный")
+        access_token = AuthService().create_access_token({"user_id": user.id})
+        response.set_cookie("access_token", access_token)
+        return {"access_token": access_token}
+
+
+@router.get("/me")
+async def get_me(
+        request: Request,
+        user_id: UserIdDep,
+):
+    
+    async with async_session_maker() as session:
+        user = await UsersRepository(session).get_one_or_none(id=user_id)
+        return user
     
 
-@router.get("/only_auth")
-async def only_auth(
-    request: Request,
-):
-    access_token = request.cookies.get("access_token", None)
-  
+
+
+@router.post("/logout")
+async def logout(response: Response, ):
+    response.delete_cookie("access_token")
+ 
